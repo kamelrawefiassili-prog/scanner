@@ -1,12 +1,16 @@
 name: Auto Fraud Scanner
 on:
   schedule:
-    - cron: '*/15 * * * *' # هذا السطر يعني: "اشتغل كل 15 دقيقة"
-  workflow_dispatch: # هذا السطر يضيف لك زراً لتشغيل الفحص يدوياً للتجربة
+    # سنضع عدة مواعيد عشوائية لزيادة فرص التشغيل وتجنب وقت الزحمة
+    - cron: '*/10 * * * *'   # تشغيل كل 10 دقائق (0, 10, 20, 30...)
+    - cron: '5,15,25,35,45,55 * * * *' # تشغيل في الدقائق الفردية لضمان عدم الانقطاع لفترة طويلة
+  workflow_dispatch: # للتشغيل اليدوي
 
 jobs:
   run-scanner:
     runs-on: ubuntu-latest
+    # نضع حد أقصى لوقت التشغيل لكي لا يعلق السكربت
+    timeout-minutes: 5 
     steps:
       - uses: actions/checkout@v3
       - name: Setup Node.js
