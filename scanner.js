@@ -7,7 +7,7 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const providers_map = {
     'peakerr_prox': { name: 'Peakerr', url: 'https://peakerr-status-2.onrender.com' },
     'trendfly_prox': { name: 'Trendfly', url: 'https://trendfly-status.onrender.com' },
-    'More_prox': { name: 'More', url: 'https://MORE-PROXY-URL-HERE.onrender.com' }, // ← غيّر الرابط الصحيح
+    'More_prox': { name: 'More', url: 'https://MORE-PROXY-URL-HERE.onrender.com' },
     'smm_prox': { name: 'SMMact', url: 'https://smm-status.onrender.com' }
 };
 
@@ -19,7 +19,6 @@ async function sendTelegram(message) {
             text: message,
             parse_mode: 'HTML'
         });
-        // تأخير صغير جدًا بين الرسائل لتجنب rate-limit
         await new Promise(r => setTimeout(r, 600));
     } catch (e) {
         console.error("Telegram send error:", e.message);
@@ -37,7 +36,6 @@ async function startScan() {
     try {
         await sendTelegram("🛡️ <b>المحارب عبد الباقي يقوم بتفقد أمان الموقع...</b>");
 
-        // إيقاظ الـ proxies (اختياري لكن مفيد)
         const wakeHeaders = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
         await Promise.all(
             Object.values(providers_map).map(p =>
@@ -51,7 +49,6 @@ async function startScan() {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
         };
 
-        // 1. جلب عدد المزودين + آخر أرقام
         const statsRes = await axios.get(`${BRIDGE_URL}?action=get_stats`, config);
         const rows = statsRes.data;
 
@@ -62,7 +59,6 @@ async function startScan() {
 
         await sendTelegram(`📊 <b>عدد المزودات المكتشفة: ${rows.length}</b>`);
 
-        // 2. فحص تسلسلي لكل مزود
         for (const row of rows) {
             const provKey = row.api_provider;
             if (!providers_map[provKey]) continue;
@@ -72,12 +68,12 @@ async function startScan() {
             const TOTAL_TO_CHECK = 1000;
             const BATCH_SIZE = 100;
 
+            // تصحيح الخطأ هنا: إزالة الأقواس والسلاش الزائدة
             await sendTelegram(
                 `🔍 <b>بدء فحص مزود: ${provInfo.name}</b>\n` +
-                `من الطلب <code>\( {lastId + 1}</code> إلى <code> \){lastId + TOTAL_TO_CHECK}</code>`
+                `من الطلب <code>${lastId + 1}</code> إلى <code>${lastId + TOTAL_TO_CHECK}</code>`
             );
 
-            // 3. انتظار 30 ثانية فقط – بدون أي استدعاء إضافي
             await sendTelegram(`⏳ <b>انتظار 30 ثانية قبل البدء الفعلي...</b>`);
             await delay(30000);
 
@@ -109,16 +105,15 @@ async function startScan() {
 
                         const order = data[id] || data[id.toString()] || {};
 
-                        if (order.status && !/error|not found|invalid/i.test(order.status)) {
-                            // وجد طلب موجود في الـ proxy فوق آخر رقم مسجل
+                        if (order.status && !/error|not found|invalid|pending/i.test(order.status)) {
                             await sendTelegram(
                                 `⚠️ <b>طلب مشكوك فيه رقم <code>${id}</code> في ${provInfo.name}</b>`
                             );
 
-                            // تحقق من الداتابيز
+                            // تصحيح الخطأ الرئيسي هنا
                             try {
                                 const check = await axios.get(
-                                    `\( {BRIDGE_URL}?action=check_order&order_id= \){id}`,
+                                    `${BRIDGE_URL}?action=check_order&order_id=${id}`, // تم التصحيح
                                     config
                                 );
 
@@ -133,14 +128,14 @@ async function startScan() {
                                     );
                                 }
                             } catch (dbErr) {
+                                console.log(dbErr); // طباعة الخطأ في الكونسول لمعرفة السبب
                                 await sendTelegram(
-                                    `⚠️ <b>خطأ في التحقق من الداتابيز للرقم <code>${id}</code></b>`
+                                    `⚠️ <b>خطأ في التحقق من الداتابيز للرقم <code>${id}</code>: ${dbErr.message}</b>`
                                 );
                             }
                         }
                     }
 
-                    // تقدم كل 200
                     if (scannedThis % 200 === 0 || scannedThis === TOTAL_TO_CHECK) {
                         await sendTelegram(
                             `📈 <b>${provInfo.name}</b>: مفحوص ${scannedThis} طلب حتى الآن...`
@@ -149,7 +144,7 @@ async function startScan() {
 
                 } catch (err) {
                     await sendTelegram(
-                        `⚠️ <b>خطأ في دفعة \( {start}– \){end} لـ ${provInfo.name}: ${err.message}</b>`
+                        `⚠️ <b>خطأ في دفعة ${start}–${end} لـ ${provInfo.name}: ${err.message}</b>`
                     );
                 }
 
