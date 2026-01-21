@@ -1,0 +1,25 @@
+name: Auto Fraud Scanner
+on:
+  schedule:
+    - cron: '*/15 * * * *' # هذا السطر يعني: "اشتغل كل 15 دقيقة"
+  workflow_dispatch: # هذا السطر يضيف لك زراً لتشغيل الفحص يدوياً للتجربة
+
+jobs:
+  run-scanner:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v3
+      - name: Setup Node.js
+        uses: actions/setup-node@v3
+        with:
+          node-version: '18'
+      - run: npm install mysql2 axios
+      - name: Run Scan
+        run: node scanner.js
+        env:
+          DB_HOST: ${{ secrets.DB_HOST }}
+          DB_USER: ${{ secrets.DB_USER }}
+          DB_PASSWORD: ${{ secrets.DB_PASSWORD }}
+          DB_NAME: ${{ secrets.DB_NAME }}
+          TELEGRAM_TOKEN: ${{ secrets.TELEGRAM_TOKEN }}
+          TELEGRAM_CHAT_ID: ${{ secrets.TELEGRAM_CHAT_ID }}
