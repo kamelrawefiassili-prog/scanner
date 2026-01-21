@@ -7,8 +7,8 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const providers_map = {
     'peakerr_prox': { name: 'Peakerr', url: 'https://peakerr-status-2.onrender.com' },
     'trendfly_prox': { name: 'Trendfly', url: 'https://trendfly-status.onrender.com' },
-    'smm_prox': { name: 'Smm_Act', url: 'https://MORE-PROXY-URL-HERE.onrender.com' },  // غيّر بالرابط الصحيح لـ More
-    'More_prox': { name: 'More', url: 'https://smm-status.onrender.com' }
+    'More_prox': { name: 'More', url: 'https://MORE-PROXY-URL-HERE.onrender.com' },  // غيّر بالرابط الصحيح لـ More!
+    'smm_prox': { name: 'SMMact', url: 'https://smm-status.onrender.com' }
 };
 
 async function sendTelegram(message) {
@@ -17,12 +17,25 @@ async function sendTelegram(message) {
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
             chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML'
         });
-        await new Promise(resolve => setTimeout(resolve, 500)); // تأخير بين الرسائل
+        await new Promise(resolve => setTimeout(resolve, 500)); // تأخير بسيط بين الرسائل
     } catch (e) { console.error("Telegram Error:", e.message); }
 }
 
 async function delay(ms) {
     return new Promise(resolve => setTimeout(resolve, ms));
+}
+
+async function getLatestIdForProvider(provKey) {
+    const config = { timeout: 20000, headers: { 'User-Agent': 'Mozilla/5.0' } };
+    try {
+        const statsRes = await axios.get(`${BRIDGE_URL}?action=get_stats`, config);
+        const rows = statsRes.data;
+        const row = rows.find(r => r.api_provider === provKey);
+        return row ? parseInt(row.last_id) || 0 : 0;
+    } catch (e) {
+        console.error("Error fetching latest ID:", e.message);
+        return 0;
+    }
 }
 
 async function startScan() {
@@ -56,23 +69,31 @@ async function startScan() {
 
         await sendTelegram(`📊 <b>عدد المزودات: ${rows.length}</b>\n<i>جاري الفحص تسلسليًا الآن...</i>`);
 
-        // تسلسلي لكل مزود
+        // فحص تسلسلي لكل مزود
         for (const row of rows) {
             const provKey = row.api_provider;
             if (!providers_map[provKey]) continue;
 
-            const lastId = parseInt(row.last_id) || 0;
+            let lastId = parseInt(row.last_id) || 0;
             const provInfo = providers_map[provKey];
-            const TOTAL_CHECK = 1000;  // +1000 طلب
+            const TOTAL_CHECK = 1000;
             const BATCH_SIZE = 100;
             const DELAY_BETWEEN = 1000;
             const PROGRESS_EVERY = 200;
 
-            await sendTelegram(`🔍 <b>بدء فحص مزود: ${provInfo.name}</b>\nمن الطلب ${lastId + 1} إلى ${lastId + TOTAL_CHECK}`);
+            await sendTelegram(`🔍 <b>بدء فحص مزود: ${provInfo.name}</b>\nمن الطلب ${lastId + 1} إلى ${lastId + TOTAL_CHECK} (مؤقت)`);
 
-            // انتظار 30 ثانية قبل البدء الفعلي
             await sendTelegram(`⏳ <b>انتظار 30 ثانية قبل بدء الفحص الفعلي لـ ${provInfo.name}...</b>`);
             await delay(30000);
+
+            // تحديث lastId بعد الانتظار عشان يلحق أي طلبات جديدة
+            const newLastId = await getLatestIdForProvider(provKey);
+            if (newLastId > lastId) {
+                await sendTelegram(`🆕 <b>تم اكتشاف طلبات جديدة أثناء الانتظار! تحديث النطاق إلى ${newLastId + 1} - ${newLastId + TOTAL_CHECK}</b>`);
+                lastId = newLastId;
+            } else {
+                await sendTelegram(`✅ <b>لا طلبات جديدة، جاري البدء بالنطاق الأصلي...</b>`);
+            }
 
             let scannedThisProvider = 0;
 
@@ -105,27 +126,28 @@ async function startScan() {
                         const orderData = results[idStr] || results[id];
 
                         if (orderData?.status && !/error|not found|invalid|pending/i.test(orderData.status)) {
-                            // طلب مشكوك فيه (موجود في الـ proxy)
                             await sendTelegram(`⚠️ <b>لقد وجدت طلب مشكوك فيه رقم <code>${id}</code> في مزود ${provInfo.name}</b>`);
 
-                            // تحقق من DB
-                            const checkRes = await axios.get(`\( {BRIDGE_URL}?action=check_order&order_id= \){id}`, config);
-                            if (checkRes.data?.exists === true) {
-                                await sendTelegram(`✅ <b>تم التحقق منه بنجاح رقم <code>${id}</code> (موجود في قاعدة البيانات)</b>`);
-                            } else {
-                                fraudDetected = true;
-                                await sendTelegram(`🚨 <b>الطلب احتيالي رقم <code>${id}</code> في مزود ${provInfo.name}!</b>`);
+                            try {
+                                const checkRes = await axios.get(`\( {BRIDGE_URL}?action=check_order&order_id= \){id}`, config);
+                                if (checkRes.data?.exists === true) {
+                                    await sendTelegram(`✅ <b>تم التحقق منه بنجاح رقم <code>${id}</code> (موجود في قاعدة البيانات)</b>`);
+                                } else {
+                                    fraudDetected = true;
+                                    await sendTelegram(`🚨 <b>الطلب احتيالي رقم <code>${id}</code> في مزود ${provInfo.name}!</b>`);
+                                }
+                            } catch (e) {
+                                await sendTelegram(`⚠️ <b>خطأ في التحقق من DB لرقم <code>${id}</code></b>`);
                             }
                         }
                     }
 
-                    // تقدم كل 200 طلب
                     if (scannedThisProvider % PROGRESS_EVERY === 0 || batchEnd === lastId + TOTAL_CHECK) {
                         await sendTelegram(`📈 <b>${provInfo.name}</b>: مفحوص ${scannedThisProvider} طلب حتى الآن...`);
                     }
 
                 } catch (err) {
-                    await sendTelegram(`⚠️ <b>خطأ في ${provInfo.name}:</b> ${err.message || 'غير معروف'}`);
+                    await sendTelegram(`⚠️ <b>خطأ في ${provInfo.name} أثناء دفعة \( {batchStart}- \){batchEnd}:</b> ${err.message || 'غير معروف'}`);
                     console.error(`[${provInfo.name}] خطأ:`, err);
                 }
 
@@ -142,7 +164,8 @@ async function startScan() {
         await sendTelegram(`${finalMsg}\n📊 <b>إجمالي الطلبات المفحوصة: ${totalScannedGlobal}</b>`);
 
     } catch (err) {
-        await sendTelegram(`❌ <b>خطأ كبير:</b> ${err.message}`);
+        await sendTelegram(`❌ <b>خطأ كبير في السكانر:</b> ${err.message}`);
+        console.error("Critical Error:", err);
     }
 }
 
