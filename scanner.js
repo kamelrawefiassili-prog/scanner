@@ -105,7 +105,7 @@ async function startScan() {
 
                         const order = data[id] || data[id.toString()] || {};
 
-                        if (order.status && !/error|not found|invalid|pending/i.test(order.status)) {
+                        if (order.status && !/error|not found|invalid/i.test(order.status)) {
                             await sendTelegram(
                                 `⚠️ <b>طلب مشكوك فيه رقم <code>${id}</code> في ${provInfo.name}</b>`
                             );
