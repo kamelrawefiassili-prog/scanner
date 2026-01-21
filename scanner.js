@@ -7,8 +7,8 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const providers_map = {
     'peakerr_prox': { name: 'Peakerr', url: 'https://peakerr-status-2.onrender.com' },
     'trendfly_prox': { name: 'Trendfly', url: 'https://trendfly-status.onrender.com' },
-    'More_prox': { name: 'More', url: 'https://smm-status.onrender.com' },
-    'smm_prox': { name: 'SMMact', url: 'https://smm-status.onrender.com' }  // غيّر لو لازم
+    'smm_prox': { name: 'Smm_Act', url: 'https://MORE-PROXY-URL-HERE.onrender.com' },  // غيّر بالرابط الصحيح لـ More
+    'More_prox': { name: 'More', url: 'https://smm-status.onrender.com' }
 };
 
 async function sendTelegram(message) {
@@ -17,6 +17,7 @@ async function sendTelegram(message) {
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
             chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML'
         });
+        await new Promise(resolve => setTimeout(resolve, 500)); // تأخير بين الرسائل
     } catch (e) { console.error("Telegram Error:", e.message); }
 }
 
@@ -26,8 +27,7 @@ async function delay(ms) {
 
 async function startScan() {
     let fraudDetected = false;
-    const providerErrors = new Set();
-    let totalScannedGlobal = 0;  // إجمالي الطلبات الكلي
+    let totalScannedGlobal = 0;
 
     try {
         await sendTelegram("🛡️ <b>المحارب عبد الباقي يقوم بتفقد أمان الموقع...</b>");
@@ -54,20 +54,25 @@ async function startScan() {
             return;
         }
 
-        await sendTelegram(`📊 <b>عدد المزودات: ${rows.length}</b>\n<i>جاري الفحص الآن...</i>`);
+        await sendTelegram(`📊 <b>عدد المزودات: ${rows.length}</b>\n<i>جاري الفحص تسلسليًا الآن...</i>`);
 
-        await Promise.all(rows.map(async (row) => {
+        // تسلسلي لكل مزود
+        for (const row of rows) {
             const provKey = row.api_provider;
-            if (!providers_map[provKey]) return;
+            if (!providers_map[provKey]) continue;
 
             const lastId = parseInt(row.last_id) || 0;
             const provInfo = providers_map[provKey];
-            const TOTAL_CHECK = 800;  // غيّر لو حابب أكثر
+            const TOTAL_CHECK = 1000;  // +1000 طلب
             const BATCH_SIZE = 100;
             const DELAY_BETWEEN = 1000;
-            const PROGRESS_EVERY = 200;  // رسالة تقدم كل 200 طلب
+            const PROGRESS_EVERY = 200;
 
             await sendTelegram(`🔍 <b>بدء فحص مزود: ${provInfo.name}</b>\nمن الطلب ${lastId + 1} إلى ${lastId + TOTAL_CHECK}`);
+
+            // انتظار 30 ثانية قبل البدء الفعلي
+            await sendTelegram(`⏳ <b>انتظار 30 ثانية قبل بدء الفحص الفعلي لـ ${provInfo.name}...</b>`);
+            await delay(30000);
 
             let scannedThisProvider = 0;
 
@@ -100,34 +105,35 @@ async function startScan() {
                         const orderData = results[idStr] || results[id];
 
                         if (orderData?.status && !/error|not found|invalid|pending/i.test(orderData.status)) {
+                            // طلب مشكوك فيه (موجود في الـ proxy)
+                            await sendTelegram(`⚠️ <b>لقد وجدت طلب مشكوك فيه رقم <code>${id}</code> في مزود ${provInfo.name}</b>`);
+
+                            // تحقق من DB
                             const checkRes = await axios.get(`\( {BRIDGE_URL}?action=check_order&order_id= \){id}`, config);
-                            if (checkRes.data?.exists === false) {
+                            if (checkRes.data?.exists === true) {
+                                await sendTelegram(`✅ <b>تم التحقق منه بنجاح رقم <code>${id}</code> (موجود في قاعدة البيانات)</b>`);
+                            } else {
                                 fraudDetected = true;
-                                const msg = `🚨 <b>احتيال مكتشف!</b>\nمزود: \( {provInfo.name}\nطلب: <code> \){id}</code>\nالحالة: ${orderData.status}`;
-                                await sendTelegram(msg);
+                                await sendTelegram(`🚨 <b>الطلب احتيالي رقم <code>${id}</code> في مزود ${provInfo.name}!</b>`);
                             }
                         }
                     }
 
-                    // رسالة تقدم كل PROGRESS_EVERY طلب
+                    // تقدم كل 200 طلب
                     if (scannedThisProvider % PROGRESS_EVERY === 0 || batchEnd === lastId + TOTAL_CHECK) {
                         await sendTelegram(`📈 <b>${provInfo.name}</b>: مفحوص ${scannedThisProvider} طلب حتى الآن...`);
                     }
 
                 } catch (err) {
-                    const errMsg = err.message || 'Unknown error';
-                    if (!providerErrors.has(provInfo.name)) {
-                        providerErrors.add(provInfo.name);
-                        await sendTelegram(`⚠️ <b>خطأ في ${provInfo.name}:</b> ${errMsg}`);
-                    }
-                    console.error(`[${provInfo.name}] خطأ: ${errMsg}`);
+                    await sendTelegram(`⚠️ <b>خطأ في ${provInfo.name}:</b> ${err.message || 'غير معروف'}`);
+                    console.error(`[${provInfo.name}] خطأ:`, err);
                 }
 
                 if (batchEnd < lastId + TOTAL_CHECK) await delay(DELAY_BETWEEN);
             }
 
             await sendTelegram(`✅ <b>انتهى فحص ${provInfo.name}</b>\nمفحوص: ${scannedThisProvider} طلب`);
-        }));
+        }
 
         const finalMsg = fraudDetected 
             ? "🔴 <b>انتهى الفحص: تم اكتشاف احتيال!</b>" 
