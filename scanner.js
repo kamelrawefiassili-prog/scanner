@@ -8,7 +8,7 @@ const providers_map = {
     'peakerr_prox': { name: 'Peakerr', url: 'https://peakerr-status-2.onrender.com' },
     'trendfly_prox': { name: 'Trendfly', url: 'https://trendfly-status.onrender.com' },
     'More_prox': { name: 'More', url: 'https://smm-status.onrender.com' },
-    'smm_prox': { name: 'SMMact', url: 'https://smm-status.onrender.com' }  // جرب ده، لو غلط غيّره
+    'smm_prox': { name: 'SMMact', url: 'https://smm-status.onrender.com' }  // غيّر لو لازم
 };
 
 async function sendTelegram(message) {
@@ -26,13 +26,13 @@ async function delay(ms) {
 
 async function startScan() {
     let fraudDetected = false;
-    const providerErrors = new Set();  // لتجنب spam الخطأ
+    const providerErrors = new Set();
+    let totalScannedGlobal = 0;  // إجمالي الطلبات الكلي
 
     try {
         await sendTelegram("🛡️ <b>المحارب عبد الباقي يقوم بتفقد أمان الموقع...</b>");
 
-        // إيقاظ الـ proxies مع headers
-        console.log("إيقاظ الـ proxies...");
+        // إيقاظ الـ proxies
         const wakeHeaders = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36' };
         await Promise.all(
             Object.values(providers_map).map(p =>
@@ -54,22 +54,22 @@ async function startScan() {
             return;
         }
 
-        await sendTelegram(`📊 <b>عدد المزودات: ${rows.length}</b>`);
+        await sendTelegram(`📊 <b>عدد المزودات: ${rows.length}</b>\n<i>جاري الفحص الآن...</i>`);
 
         await Promise.all(rows.map(async (row) => {
             const provKey = row.api_provider;
-            if (!providers_map[provKey]) {
-                console.log(`مزود غير مدعوم: ${provKey}`);
-                return;
-            }
+            if (!providers_map[provKey]) return;
 
             const lastId = parseInt(row.last_id) || 0;
             const provInfo = providers_map[provKey];
-            const TOTAL_CHECK = 800;
+            const TOTAL_CHECK = 800;  // غيّر لو حابب أكثر
             const BATCH_SIZE = 100;
             const DELAY_BETWEEN = 1000;
+            const PROGRESS_EVERY = 200;  // رسالة تقدم كل 200 طلب
 
-            console.log(`[${provInfo.name}] فحص من ${lastId + 1}`);
+            await sendTelegram(`🔍 <b>بدء فحص مزود: ${provInfo.name}</b>\nمن الطلب ${lastId + 1} إلى ${lastId + TOTAL_CHECK}`);
+
+            let scannedThisProvider = 0;
 
             for (let i = 0; i < TOTAL_CHECK; i += BATCH_SIZE) {
                 const batchStart = lastId + 1 + i;
@@ -91,10 +91,11 @@ async function startScan() {
 
                 try {
                     const response = await axios.post(`${provInfo.url}/orders`, payload, postConfig);
-
                     const results = response.data || {};
 
                     for (const id of batchIds) {
+                        scannedThisProvider++;
+                        totalScannedGlobal++;
                         const idStr = id.toString();
                         const orderData = results[idStr] || results[id];
 
@@ -102,27 +103,37 @@ async function startScan() {
                             const checkRes = await axios.get(`\( {BRIDGE_URL}?action=check_order&order_id= \){id}`, config);
                             if (checkRes.data?.exists === false) {
                                 fraudDetected = true;
-                                const msg = `🚨 <b>احتيال!</b>\nمزود: \( {provInfo.name}\nطلب: <code> \){id}</code>`;
+                                const msg = `🚨 <b>احتيال مكتشف!</b>\nمزود: \( {provInfo.name}\nطلب: <code> \){id}</code>\nالحالة: ${orderData.status}`;
                                 await sendTelegram(msg);
                             }
                         }
                     }
+
+                    // رسالة تقدم كل PROGRESS_EVERY طلب
+                    if (scannedThisProvider % PROGRESS_EVERY === 0 || batchEnd === lastId + TOTAL_CHECK) {
+                        await sendTelegram(`📈 <b>${provInfo.name}</b>: مفحوص ${scannedThisProvider} طلب حتى الآن...`);
+                    }
+
                 } catch (err) {
                     const errMsg = err.message || 'Unknown error';
                     if (!providerErrors.has(provInfo.name)) {
                         providerErrors.add(provInfo.name);
-                        await sendTelegram(`⚠️ <b>خطأ في مزود ${provInfo.name}:</b> ${errMsg}`);
+                        await sendTelegram(`⚠️ <b>خطأ في ${provInfo.name}:</b> ${errMsg}`);
                     }
                     console.error(`[${provInfo.name}] خطأ: ${errMsg}`);
                 }
 
                 if (batchEnd < lastId + TOTAL_CHECK) await delay(DELAY_BETWEEN);
             }
+
+            await sendTelegram(`✅ <b>انتهى فحص ${provInfo.name}</b>\nمفحوص: ${scannedThisProvider} طلب`);
         }));
 
-        if (!fraudDetected) {
-            await sendTelegram("✅ <b>انتهى الفحص.. كل شيء نظيف.</b>");
-        }
+        const finalMsg = fraudDetected 
+            ? "🔴 <b>انتهى الفحص: تم اكتشاف احتيال!</b>" 
+            : "✅ <b>انتهى المحارب عبد الباقي من الفحص.. كل شيء نظيف!</b>";
+        
+        await sendTelegram(`${finalMsg}\n📊 <b>إجمالي الطلبات المفحوصة: ${totalScannedGlobal}</b>`);
 
     } catch (err) {
         await sendTelegram(`❌ <b>خطأ كبير:</b> ${err.message}`);
