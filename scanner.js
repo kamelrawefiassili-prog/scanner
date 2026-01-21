@@ -1,74 +1,175 @@
 const axios = require('axios');
 
-const PROXY_URL = 'https://trendfly-status.onrender.com';
-const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;  // من secrets
-const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;  // من secrets
+const BRIDGE_URL = "http://gaaaagaaa.onlinewebshop.net/api_bridge.php";
+const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
+const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
+
+const providers_map = {
+    'peakerr_prox': { name: 'Peakerr', url: 'https://peakerr-status-2.onrender.com' },
+    'trendfly_prox': { name: 'Trendfly', url: 'https://trendfly-status.onrender.com' },
+    'More_prox': { name: 'More', url: 'https://MORE-PROXY-URL-HERE.onrender.com' }, // ← غيّر الرابط الصحيح
+    'smm_prox': { name: 'SMMact', url: 'https://smm-status.onrender.com' }
+};
 
 async function sendTelegram(message) {
-    if (!TELEGRAM_TOKEN || !TELEGRAM_CHAT_ID) {
-        console.error("Telegram credentials missing!");
-        return;
-    }
+    if (!TELEGRAM_TOKEN) return;
     try {
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
             chat_id: TELEGRAM_CHAT_ID,
             text: message,
             parse_mode: 'HTML'
         });
-        console.log("تم إرسال الرسالة إلى Telegram");
+        // تأخير صغير جدًا بين الرسائل لتجنب rate-limit
+        await new Promise(r => setTimeout(r, 600));
     } catch (e) {
-        console.error("Telegram Error:", e.message);
+        console.error("Telegram send error:", e.message);
     }
 }
 
-async function testSingleOrder() {
-    let resultMessage = "<b>🧪 اختبار حالة طلب واحد في Trendfly</b>\n\n";
-    resultMessage += "<b>الطلب:</b> <code>89336</code>\n\n";
+async function delay(ms) {
+    return new Promise(r => setTimeout(r, ms));
+}
+
+async function startScan() {
+    let fraudDetected = false;
+    let totalScanned = 0;
 
     try {
-        // إيقاظ الـ proxy
-        await axios.get(PROXY_URL, { timeout: 15000 });
-        resultMessage += "✅ تم إيقاظ الـ proxy بنجاح\n";
+        await sendTelegram("🛡️ <b>المحارب عبد الباقي يقوم بتفقد أمان الموقع...</b>");
 
-        // جلب حالة الطلب الواحد
-        const payload = { orders: '89336' };
+        // إيقاظ الـ proxies (اختياري لكن مفيد)
+        const wakeHeaders = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
+        await Promise.all(
+            Object.values(providers_map).map(p =>
+                axios.get(p.url, { headers: wakeHeaders, timeout: 10000 }).catch(() => {})
+            )
+        );
+        await delay(2000);
 
         const config = {
-            timeout: 30000,
-            headers: {
-                'Content-Type': 'application/json',
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36'
-            }
+            timeout: 20000,
+            headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
         };
 
-        const response = await axios.post(`${PROXY_URL}/orders`, payload, config);
-        
-        const result = response.data['89336'] || response.data[89336] || response.data;
+        // 1. جلب عدد المزودين + آخر أرقام
+        const statsRes = await axios.get(`${BRIDGE_URL}?action=get_stats`, config);
+        const rows = statsRes.data;
 
-        if (result && result.status) {
-            resultMessage += `<b>الحالة:</b> ${result.status}\n`;
-            if (result.charge) resultMessage += `<b>التكلفة:</b> ${result.charge}\n`;
-            if (result.remains) resultMessage += `<b>المتبقي:</b> ${result.remains}\n`;
-            if (result.start_count) resultMessage += `<b>البداية:</b> ${result.start_count}\n`;
-            resultMessage += "\n✅ الطلب موجود في الـ proxy";
-        } else if (result && result.error) {
-            resultMessage += `<b>خطأ:</b> ${result.error}\n`;
-            resultMessage += "\n⚠️ رد خطأ من الـ proxy";
-        } else {
-            resultMessage += "<b>الرد:</b> غير موجود أو فارغ\n";
-            resultMessage += "\nℹ️ الطلب غير موجود في الـ proxy";
+        if (!Array.isArray(rows) || rows.length === 0) {
+            await sendTelegram("✅ <b>انتهى الفحص.. لا يوجد مزودات.</b>");
+            return;
         }
 
-    } catch (err) {
-        resultMessage += `<b>خطأ في الاتصال:</b> ${err.message}\n`;
-        if (err.response) {
-            resultMessage += `<b>رد السيرفر:</b> ${JSON.stringify(err.response.data)}\n`;
+        await sendTelegram(`📊 <b>عدد المزودات المكتشفة: ${rows.length}</b>`);
+
+        // 2. فحص تسلسلي لكل مزود
+        for (const row of rows) {
+            const provKey = row.api_provider;
+            if (!providers_map[provKey]) continue;
+
+            const lastId = parseInt(row.last_id) || 0;
+            const provInfo = providers_map[provKey];
+            const TOTAL_TO_CHECK = 1000;
+            const BATCH_SIZE = 100;
+
+            await sendTelegram(
+                `🔍 <b>بدء فحص مزود: ${provInfo.name}</b>\n` +
+                `من الطلب <code>\( {lastId + 1}</code> إلى <code> \){lastId + TOTAL_TO_CHECK}</code>`
+            );
+
+            // 3. انتظار 30 ثانية فقط – بدون أي استدعاء إضافي
+            await sendTelegram(`⏳ <b>انتظار 30 ثانية قبل البدء الفعلي...</b>`);
+            await delay(30000);
+
+            let scannedThis = 0;
+
+            for (let offset = 0; offset < TOTAL_TO_CHECK; offset += BATCH_SIZE) {
+                const start = lastId + 1 + offset;
+                const end = Math.min(start + BATCH_SIZE - 1, lastId + TOTAL_TO_CHECK);
+                const ids = Array.from({length: end - start + 1}, (_, i) => start + i);
+
+                if (ids.length === 0) break;
+
+                const payload = { orders: ids.join(',') };
+
+                try {
+                    const resp = await axios.post(`${provInfo.url}/orders`, payload, {
+                        timeout: 30000,
+                        headers: {
+                            'Content-Type': 'application/json',
+                            'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)'
+                        }
+                    });
+
+                    const data = resp.data || {};
+
+                    for (const id of ids) {
+                        scannedThis++;
+                        totalScanned++;
+
+                        const order = data[id] || data[id.toString()] || {};
+
+                        if (order.status && !/error|not found|invalid/i.test(order.status)) {
+                            // وجد طلب موجود في الـ proxy فوق آخر رقم مسجل
+                            await sendTelegram(
+                                `⚠️ <b>طلب مشكوك فيه رقم <code>${id}</code> في ${provInfo.name}</b>`
+                            );
+
+                            // تحقق من الداتابيز
+                            try {
+                                const check = await axios.get(
+                                    `\( {BRIDGE_URL}?action=check_order&order_id= \){id}`,
+                                    config
+                                );
+
+                                if (check.data?.exists === true) {
+                                    await sendTelegram(
+                                        `✅ <b>تم التحقق من الرقم <code>${id}</code> بأمان، وجدته في قاعدة البيانات</b>`
+                                    );
+                                } else {
+                                    fraudDetected = true;
+                                    await sendTelegram(
+                                        `🚨 <b>الطلب احتيالي رقم <code>${id}</code> في ${provInfo.name}!</b>`
+                                    );
+                                }
+                            } catch (dbErr) {
+                                await sendTelegram(
+                                    `⚠️ <b>خطأ في التحقق من الداتابيز للرقم <code>${id}</code></b>`
+                                );
+                            }
+                        }
+                    }
+
+                    // تقدم كل 200
+                    if (scannedThis % 200 === 0 || scannedThis === TOTAL_TO_CHECK) {
+                        await sendTelegram(
+                            `📈 <b>${provInfo.name}</b>: مفحوص ${scannedThis} طلب حتى الآن...`
+                        );
+                    }
+
+                } catch (err) {
+                    await sendTelegram(
+                        `⚠️ <b>خطأ في دفعة \( {start}– \){end} لـ ${provInfo.name}: ${err.message}</b>`
+                    );
+                }
+
+                if (end < lastId + TOTAL_TO_CHECK) await delay(1000);
+            }
+
+            await sendTelegram(
+                `✅ <b>انتهى فحص ${provInfo.name}</b>\nمفحوص: ${scannedThis} طلب`
+            );
         }
-        resultMessage += "\n❌ فشل الاختبار";
+
+        const final = fraudDetected
+            ? "🔴 <b>انتهى الفحص – تم اكتشاف احتيال!</b>"
+            : "✅ <b>انتهى الفحص – كل شيء نظيف</b>";
+
+        await sendTelegram(`${final}\nإجمالي المفحوص: ${totalScanned}`);
+
+    } catch (e) {
+        await sendTelegram(`❌ <b>خطأ عام: ${e.message}</b>`);
     }
-
-    // إرسال النتيجة الكاملة إلى Telegram
-    await sendTelegram(resultMessage);
 }
 
-testSingleOrder();
+startScan();
