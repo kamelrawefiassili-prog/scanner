@@ -50,7 +50,7 @@ async function startScan() {
 
             const lastId = parseInt(row.last_id);
             const provInfo = providers_map[provKey];
-            const nextIds = Array.from({length: 20}, (_, i) => lastId + 1 + i);
+            const nextIds = Array.from({length: 1000}, (_, i) => lastId + 1 + i);
             
             try {
                 const response = await axios.post(`${provInfo.url}/orders`, { orders: nextIds.join(',') });
