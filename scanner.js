@@ -1,13 +1,7 @@
-const mysql = require('mysql2/promise');
 const axios = require('axios');
 
-// الإعدادات - سيتم جلبها من GitHub Secrets للأمان
-const dbConfig = {
-    host: process.env.DB_HOST,
-    user: process.env.DB_USER,
-    password: process.env.DB_PASSWORD,
-    database: process.env.DB_NAME,
-};
+// ضع رابط ملف الجسر الذي رفعته على استضافتك هنا
+const BRIDGE_URL = "https://yourdomain.com/api_bridge.php"; // <--- غير هذا الرابط برابط موقعك الحقيقي
 
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
@@ -20,25 +14,18 @@ const providers_map = {
 
 async function sendTelegram(message) {
     if (!TELEGRAM_TOKEN) return;
-    const url = `https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`;
     try {
-        await axios.post(url, { chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML' });
-    } catch (e) { console.error("خطأ في إرسال تليجرام"); }
+        await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
+            chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML'
+        });
+    } catch (e) { console.error("Telegram Error"); }
 }
 
 async function startScan() {
-    let connection;
     try {
-        connection = await mysql.createConnection(dbConfig);
-        console.log("تم الاتصال بقاعدة البيانات...");
-
-        // 1. جلب آخر ID لكل مزود من قاعدتك
-        const [rows] = await connection.execute(`
-            SELECT api_provider, MAX(api_order_id) as last_id 
-            FROM orders 
-            WHERE api_provider IS NOT NULL AND api_order_id REGEXP '^[0-9]+$'
-            GROUP BY api_provider
-        `);
+        console.log("جاري جلب الإحصائيات عبر الجسر...");
+        const statsRes = await axios.get(`${BRIDGE_URL}?action=get_stats`);
+        const rows = statsRes.data;
 
         for (const row of rows) {
             const provKey = row.api_provider;
@@ -46,11 +33,9 @@ async function startScan() {
 
             const lastId = parseInt(row.last_id);
             const provInfo = providers_map[provKey];
-            
-            console.log(`فحص مزود: ${provInfo.name} من بعد الطلب: ${lastId}`);
+            console.log(`فحص ${provInfo.name} من بعد ID: ${lastId}`);
 
-            // 2. فحص 100 طلب تالي (Batch)
-            const nextIds = Array.from({length: 100}, (_, i) => lastId + 1 + i);
+            const nextIds = Array.from({length: 50}, (_, i) => lastId + 1 + i);
             
             try {
                 const response = await axios.post(`${provInfo.url}/orders`, { orders: nextIds.join(',') });
@@ -58,36 +43,23 @@ async function startScan() {
 
                 for (const id of nextIds) {
                     const orderData = results[id] || results[id.toString()];
-                    
                     if (orderData && orderData.status && !/error|not found/i.test(orderData.status)) {
-                        // الطلب موجود عند المزود.. هل هو موجود عندك؟
-                        const [check] = await connection.execute('SELECT id FROM orders WHERE api_order_id = ?', [id]);
                         
-                        if (check.length === 0) {
-                            // احتيال مكتشف!
-                            const msg = `🚨 <b>اكتشاف طلب احتيالي!</b>\n\n` +
+                        // التحقق عبر الجسر إذا كان الطلب عندك
+                        const checkRes = await axios.get(`${BRIDGE_URL}?action=check_order&order_id=${id}`);
+                        if (!checkRes.data.exists) {
+                            const msg = `🚨 <b>احتيال مكتشف!</b>\n\n` +
                                         `📌 المزود: ${provInfo.name}\n` +
-                                        `🆔 رقم الطلب: <code>${id}</code>\n` +
-                                        `📊 الحالة: ${orderData.status}\n` +
-                                        `💰 التكلفة: ${orderData.charge || '?'}`;
-                            
-                            console.log(`! احتيال: ${id}`);
+                                        `🆔 رقم الطلب: ${id}\n` +
+                                        `📊 الحالة: ${orderData.status}`;
                             await sendTelegram(msg);
-
-                            // اختيارياً: يمكنك إضافة كود هنا لإرسال طلب إلغاء (Cancel) تلقائي للمزود
+                            console.log(`! تم اكتشاف احتيال: ${id}`);
                         }
                     }
                 }
-            } catch (err) {
-                console.error(`خطأ في فحص مزود ${provInfo.name}`);
-            }
+            } catch (err) { console.error(`Error with ${provInfo.name}`); }
         }
-
-    } catch (err) {
-        console.error("خطأ عام:", err.message);
-    } finally {
-        if (connection) await connection.end();
-    }
+    } catch (err) { console.error("Bridge Connection Error:", err.message); }
 }
 
 startScan();
