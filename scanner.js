@@ -1,8 +1,6 @@
 const axios = require('axios');
 
-// رابط الجسر الخاص بك
-const BRIDGE_URL = "http://gaaaagaaa.onlinewebshop.net/api_bridge.php"; 
-
+const BRIDGE_URL = "http://gaaaagaaa.onlinewebshop.net/api_bridge.php";
 const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
@@ -18,66 +16,76 @@ async function sendTelegram(message) {
         await axios.post(`https://api.telegram.org/bot${TELEGRAM_TOKEN}/sendMessage`, {
             chat_id: TELEGRAM_CHAT_ID, text: message, parse_mode: 'HTML'
         });
-    } catch (e) { console.error("Telegram Error"); }
+    } catch (e) { console.error("Telegram Error:", e.message); }
 }
 
 async function startScan() {
     let fraudDetected = false;
     try {
-        // رسالة البداية
-        await sendTelegram("🛡️ <b>المحارب عبد الباقي يقوم بتفقد أمان الموقع...</b>");
+        await sendTelegram("المحارب عبد الباقي يقوم بتفقد أمان الموقع...");
 
-        console.log("جاري جلب الإحصائيات عبر الجسر...");
-        
+        console.log("إيقاظ الـ proxies...");
+        await Promise.all(
+            Object.values(providers_map).map(p => axios.get(p.url).catch(() => {}))
+        );
+
         const config = {
-            headers: {
-                'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36',
-                'Accept': 'application/json'
-            }
+            timeout: 15000,
+            headers: { 'User-Agent': 'Mozilla/5.0...' }
         };
 
         const statsRes = await axios.get(`${BRIDGE_URL}?action=get_stats`, config);
         const rows = statsRes.data;
 
-        if (!Array.isArray(rows)) {
-            console.log("الرد غير صالح.");
+        if (!Array.isArray(rows) || rows.length === 0) {
+            await sendTelegram("انتهى الفحص.. لا يوجد مزودات أو بيانات.");
             return;
         }
 
-        for (const row of rows) {
+        await Promise.all(rows.map(async (row) => {
             const provKey = row.api_provider;
-            if (!providers_map[provKey]) continue;
+            if (!providers_map[provKey]) return;
 
-            const lastId = parseInt(row.last_id);
+            const lastId = parseInt(row.last_id) || 0;
             const provInfo = providers_map[provKey];
-            const nextIds = Array.from({length: 1000}, (_, i) => lastId + 1 + i);
-            
+            const CHECK_COUNT = 200; // قللناه
+            const nextIds = Array.from({length: CHECK_COUNT}, (_, i) => lastId + 1 + i);
+
             try {
-                const response = await axios.post(`${provInfo.url}/orders`, { orders: nextIds.join(',') });
-                const results = response.data;
+                const response = await axios.post(`${provInfo.url}/orders`, { 
+                    orders: nextIds.join(',') 
+                }, { timeout: 30000 });
+
+                const results = response.data || {};
 
                 for (const id of nextIds) {
                     const orderData = results[id] || results[id.toString()];
-                    if (orderData && orderData.status && !/error|not found/i.test(orderData.status)) {
-                        
-                        const checkRes = await axios.get(`${BRIDGE_URL}?action=check_order&order_id=${id}`, config);
-                        if (checkRes.data && checkRes.data.exists === false) {
-                            fraudDetected = true;
-                            const msg = `🚨 <b>احتيال مكتشف!</b>\n\n📌 المزود: ${provInfo.name}\n🆔 الطلب: <code>${id}</code>`;
-                            await sendTelegram(msg);
-                        }
+                    if (orderData?.status && !/error|not found|pending/i.test(orderData.status)) {
+                        try {
+                            const checkRes = await axios.get(
+                                `\( {BRIDGE_URL}?action=check_order&order_id= \){id}`, 
+                                { ...config, timeout: 10000 }
+                            );
+                            if (checkRes.data?.exists === false) {
+                                fraudDetected = true;
+                                const msg = `احتيال مكتشف!\n\nالمزود: \( {provInfo.name}\nالطلب: <code> \){id}</code>\nالوقت: ${new Date().toLocaleString('ar-TN')}`;
+                                await sendTelegram(msg);
+                            }
+                        } catch (e) {}
                     }
                 }
-            } catch (err) { console.error(`Error with ${provInfo.name}`); }
-        }
+            } catch (err) {
+                console.error(`خطأ في ${provInfo.name}:`, err.message);
+            }
+        }));
 
-        // رسالة النهاية في حال كان الموقع نظيفاً
         if (!fraudDetected) {
-            await sendTelegram("✅ <b>انتهى المحارب عبد الباقي من الفحص.. كل شيء نظيف لا تقلق، كل شيء على ما يرام.</b>");
+            await sendTelegram("انتهى المحارب عبد الباقي من الفحص.. كل شيء نظيف لا تقلق، كل شيء على ما يرام.");
         }
 
-    } catch (err) { 
-        console.error("Bridge Connection Error:", err.message);
+    } catch (err) {
+        await sendTelegram(`خطأ في السكانر: ${err.message}`);
+        console.error(err);
     }
 }
 
