@@ -7,7 +7,6 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const providers_map = {
     'peakerr_prox': { name: 'Peakerr', url: 'https://peakerr-status-2.onrender.com' },
     'trendfly_prox': { name: 'Trendfly', url: 'https://trendfly-status.onrender.com' },
-    
     'More_prox': { name: 'More', url: 'https://smm-status.onrender.com' }
 };
 
@@ -33,9 +32,15 @@ async function startScan() {
     let fraudDetected = false;
     let totalScanned = 0;
 
-    try {
-        await sendTelegram("🛡️ <b>المحارب عبد الباقي يقوم بتفقد أمان الموقع...</b>");
+    // إعدادات الفحص (للخلف وللأمام)
+    const BACKWARD_CHECK = 800; // عدد الطلبات للفحص خلف الرقم الحالي
+    const FORWARD_CHECK = 800;  // عدد الطلبات للفحص أمام الرقم الحالي
+    const BATCH_SIZE = 100;     // حجم الدفعة في الطلب الواحد
 
+    try {
+        await sendTelegram("🛡️ <b>المحارب عبد الباقي يبدأ عملية المسح الشامل (خلفي وأمامي)...</b>");
+
+        // إيقاظ السيرفرات
         const wakeHeaders = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
         await Promise.all(
             Object.values(providers_map).map(p =>
@@ -49,11 +54,12 @@ async function startScan() {
             headers: { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' }
         };
 
+        // جلب آخر الآيديهات من قاعدتك
         const statsRes = await axios.get(`${BRIDGE_URL}?action=get_stats`, config);
         const rows = statsRes.data;
 
         if (!Array.isArray(rows) || rows.length === 0) {
-            await sendTelegram("✅ <b>انتهى الفحص.. لا يوجد مزودات.</b>");
+            await sendTelegram("✅ <b>انتهى الفحص.. لا يوجد مزودات مسجلة.</b>");
             return;
         }
 
@@ -65,30 +71,42 @@ async function startScan() {
 
             const lastId = parseInt(row.last_id) || 0;
             const provInfo = providers_map[provKey];
-            const TOTAL_TO_CHECK = 1000;
-            const BATCH_SIZE = 100;
 
-            // تصحيح الخطأ هنا: إزالة الأقواس والسلاش الزائدة
+            // 1. حساب نقطة البداية والنهاية
+            // نبدأ من (آخر رقم - 100) وننتهي عند (آخر رقم + 800)
+            let startScanId = lastId - BACKWARD_CHECK;
+            if (startScanId < 1) startScanId = 1; // ضمان عدم النزول تحت الصفر
+            
+            let endScanId = lastId + FORWARD_CHECK;
+            
+            const totalIdsToCheck = endScanId - startScanId + 1;
+
             await sendTelegram(
-                `🔍 <b>بدء فحص مزود: ${provInfo.name}</b>\n` +
-                `من الطلب <code>${lastId + 1}</code> إلى <code>${lastId + TOTAL_TO_CHECK}</code>`
+                `🔍 <b>فحص مزود: ${provInfo.name}</b>\n` +
+                `🎯 آخر رقم مسجل: <code>${lastId}</code>\n` +
+                `🔙 فحص خلفي من: <code>${startScanId}</code>\n` +
+                `🔜 فحص أمامي إلى: <code>${endScanId}</code>`
             );
 
-            await sendTelegram(`⏳ <b>انتظار 30 ثانية قبل البدء الفعلي...</b>`);
-            await delay(30000);
+            await sendTelegram(`⏳ <b>انتظار 10 ثوانٍ قبل الهجوم...</b>`);
+            await delay(10000);
 
             let scannedThis = 0;
 
-            for (let offset = 0; offset < TOTAL_TO_CHECK; offset += BATCH_SIZE) {
-                const start = lastId + 1 + offset;
-                const end = Math.min(start + BATCH_SIZE - 1, lastId + TOTAL_TO_CHECK);
-                const ids = Array.from({length: end - start + 1}, (_, i) => start + i);
+            // حلقة الفحص من البداية (الخلف) إلى النهاية (الأمام)
+            for (let offset = 0; offset < totalIdsToCheck; offset += BATCH_SIZE) {
+                const currentBatchStart = startScanId + offset;
+                const currentBatchEnd = Math.min(currentBatchStart + BATCH_SIZE - 1, endScanId);
+                
+                // إنشاء مصفوفة الآيديهات لهذه الدفعة
+                const ids = Array.from({length: currentBatchEnd - currentBatchStart + 1}, (_, i) => currentBatchStart + i);
 
                 if (ids.length === 0) break;
 
                 const payload = { orders: ids.join(',') };
 
                 try {
+                    // 1. الفحص في البروكسي (المزود)
                     const resp = await axios.post(`${provInfo.url}/orders`, payload, {
                         timeout: 30000,
                         headers: {
@@ -105,65 +123,70 @@ async function startScan() {
 
                         const order = data[id] || data[id.toString()] || {};
 
-                        if (order.status && !/error|not found|invalid/i.test(order.status)) {
-                            await sendTelegram(
-                                `⚠️ <b>طلب مشكوك فيه رقم <code>${id}</code> في ${provInfo.name}</b>`
-                            );
-
-                            // تصحيح الخطأ الرئيسي هنا
+                        // الشرط: هل الطلب موجود في المزود وحالته صالحة؟
+                        if (order.status && !/error|not found|invalid|incorrect/i.test(order.status)) {
+                            
+                            // 2. إذا وجدناه في المزود، نتحقق من قاعدتنا (Local DB)
                             try {
                                 const check = await axios.get(
-                                    `${BRIDGE_URL}?action=check_order&order_id=${id}`, // تم التصحيح
+                                    `${BRIDGE_URL}?action=check_order&order_id=${id}`,
                                     config
                                 );
 
                                 if (check.data?.exists === true) {
-                                    await sendTelegram(
-                                        `✅ <b>تم التحقق من الرقم <code>${id}</code> بأمان، وجدته في قاعدة البيانات</b>`
-                                    );
+                                    // موجود في المزود وموجود عندنا = سليم
+                                    // (يمكنك تفعيل هذا السطر إذا أردت رؤية الطلبات السليمة، لكن الأفضل إخفاؤه لعدم الإزعاج)
+                                    // await sendTelegram(`✅ سليم: ${id}`);
                                 } else {
+                                    // موجود في المزود وغير موجود عندنا = احتيال
                                     fraudDetected = true;
                                     await sendTelegram(
-                                        `🚨 <b>الطلب احتيالي رقم <code>${id}</code> في ${provInfo.name}!</b>`
+                                        `🚨 <b>كشف احتيال في ${provInfo.name}!</b>\n` +
+                                        `🆔 رقم الطلب: <code>${id}</code>\n` +
+                                        `🔎 الحالة في المزود: ${order.status}\n` +
+                                        `❌ <b>غير موجود في قاعدة البيانات! يجب إلغاؤه.</b>`
                                     );
                                 }
                             } catch (dbErr) {
-                                console.log(dbErr); // طباعة الخطأ في الكونسول لمعرفة السبب
+                                console.log(dbErr);
                                 await sendTelegram(
-                                    `⚠️ <b>خطأ في التحقق من الداتابيز للرقم <code>${id}</code>: ${dbErr.message}</b>`
+                                    `⚠️ <b>خطأ اتصال بالقاعدة للرقم <code>${id}</code></b>`
                                 );
                             }
+                        } else {
+                            // إذا لم يجد شيئاً في المزود، فهذا طبيعي (خاصة في الفحص الأمامي)
                         }
                     }
 
-                    if (scannedThis % 200 === 0 || scannedThis === TOTAL_TO_CHECK) {
+                    // تقرير مرحلي كل 200 طلب
+                    if (scannedThis % 200 === 0) {
                         await sendTelegram(
-                            `📈 <b>${provInfo.name}</b>: مفحوص ${scannedThis} طلب حتى الآن...`
+                            `📈 <b>${provInfo.name}</b>: تم مسح ${scannedThis} طلب (وصلنا لـ ${currentBatchEnd})...`
                         );
                     }
 
                 } catch (err) {
                     await sendTelegram(
-                        `⚠️ <b>خطأ في دفعة ${start}–${end} لـ ${provInfo.name}: ${err.message}</b>`
+                        `⚠️ <b>تجاوز دفعة ${currentBatchStart}–${currentBatchEnd} بسبب خطأ: ${err.message}</b>`
                     );
                 }
 
-                if (end < lastId + TOTAL_TO_CHECK) await delay(1000);
+                if (currentBatchEnd < endScanId) await delay(1000);
             }
 
             await sendTelegram(
-                `✅ <b>انتهى فحص ${provInfo.name}</b>\nمفحوص: ${scannedThis} طلب`
+                `✅ <b>انتهى فحص ${provInfo.name}</b>\nإجمالي المفحوص: ${scannedThis}`
             );
         }
 
         const final = fraudDetected
-            ? "🔴 <b>انتهى الفحص – تم اكتشاف احتيال!</b>"
-            : "✅ <b>انتهى الفحص – كل شيء نظيف</b>";
+            ? "🔴 <b>انتهى الفحص – تم رصد عمليات احتيال (طلبات وهمية)!</b>"
+            : "✅ <b>انتهى الفحص – الوضع آمن ونظيف.</b>";
 
-        await sendTelegram(`${final}\nإجمالي المفحوص: ${totalScanned}`);
+        await sendTelegram(`${final}\nإجمالي العمليات المفحوصة: ${totalScanned}`);
 
     } catch (e) {
-        await sendTelegram(`❌ <b>خطأ عام: ${e.message}</b>`);
+        await sendTelegram(`❌ <b>خطأ كارثي في النظام: ${e.message}</b>`);
     }
 }
 
