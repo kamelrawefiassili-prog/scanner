@@ -30,7 +30,7 @@ async function delay(ms) {
 
 async function startScan() {
     // إعدادات الفحص الجديدة
-    const BACKWARD_CHECK = 10000;  // 500 للخلف
+    const BACKWARD_CHECK = 700;  // 500 للخلف
     const FORWARD_CHECK = 1000;  // 1000 للأمام
     const BATCH_SIZE = 100;
 
