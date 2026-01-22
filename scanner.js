@@ -7,8 +7,8 @@ const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 const providers_map = {
     'peakerr_prox': { name: 'Peakerr', url: 'https://peakerr-status-2.onrender.com' },
     'trendfly_prox': { name: 'Trendfly', url: 'https://trendfly-status.onrender.com' },
-    'More_prox': { name: 'More', url: 'https://MORE-PROXY-URL-HERE.onrender.com' },
-    'smm_prox': { name: 'SMMact', url: 'https://smm-status.onrender.com' }
+    
+    'More_prox': { name: 'More', url: 'https://smm-status.onrender.com' }
 };
 
 async function sendTelegram(message) {
