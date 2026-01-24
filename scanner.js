@@ -5,18 +5,9 @@ const TELEGRAM_TOKEN = process.env.TELEGRAM_TOKEN;
 const TELEGRAM_CHAT_ID = process.env.TELEGRAM_CHAT_ID;
 
 const providers_map = {
-    'peakerr_prox': { 
-        name: 'Peakerr', 
-        url: 'https://peakerr-status-2.onrender.com'  // الـ proxy نفسه يدعم /cancel
-    },
-    'trendfly_prox': { 
-        name: 'Trendfly', 
-        url: 'https://trendfly-status.onrender.com'
-    },
-    'More_prox': { 
-        name: 'More', 
-        url: 'https://smm-status.onrender.com'
-    }
+    'peakerr_prox': { name: 'Peakerr', url: 'https://peakerr-status-2.onrender.com' },
+    'trendfly_prox': { name: 'Trendfly', url: 'https://trendfly-status.onrender.com' },
+    'More_prox': { name: 'More', url: 'https://smm-status.onrender.com' }
 };
 
 async function sendTelegram(message) {
@@ -38,19 +29,21 @@ async function delay(ms) {
 }
 
 async function startScan() {
-    const BACKWARD_CHECK = 700;
-    const FORWARD_CHECK = 1000;
+    // إعدادات الفحص الجديدة
+    const BACKWARD_CHECK = 700;  // 500 للخلف
+    const FORWARD_CHECK = 1000;  // 1000 للأمام
     const BATCH_SIZE = 100;
 
+    // متغيرات الإحصاء الدقيق
     let stats = {
         totalScanned: 0,
         fraudDetected: 0,
         status: {
-            canceled: 0,
-            active: 0,
-            completed: 0
+            canceled: 0,   // تم صده (ملغي)
+            active: 0,     // نشط (pending, processing...)
+            completed: 0   // نفذ (completed, partial)
         },
-        lostMoney: 0.0
+        lostMoney: 0.0     // مجموع خسائر الطلبات المكتملة
     };
 
     try {
@@ -89,14 +82,17 @@ async function startScan() {
             let startScanId = lastId - BACKWARD_CHECK;
             if (startScanId < 1) startScanId = 1;
             let endScanId = lastId + FORWARD_CHECK;
+            const totalIdsToCheck = endScanId - startScanId + 1;
 
             await sendTelegram(
                 `🔍 <b>\( {provInfo.name}</b>: جاري الفحص من <code> \){startScanId}</code> إلى <code>${endScanId}</code>`
             );
 
-            await delay(5000);
+            await delay(5000); // انتظار بسيط
 
-            for (let offset = 0; offset < (endScanId - startScanId + 1); offset += BATCH_SIZE) {
+            let scannedThis = 0;
+
+            for (let offset = 0; offset < totalIdsToCheck; offset += BATCH_SIZE) {
                 const currentBatchStart = startScanId + offset;
                 const currentBatchEnd = Math.min(currentBatchStart + BATCH_SIZE - 1, endScanId);
                 const ids = Array.from({length: currentBatchEnd - currentBatchStart + 1}, (_, i) => currentBatchStart + i);
@@ -104,6 +100,7 @@ async function startScan() {
                 if (ids.length === 0) break;
 
                 try {
+                    // 1. الفحص عند المزود (البروكسي)
                     const resp = await axios.post(`${provInfo.url}/orders`, { orders: ids.join(',') }, {
                         timeout: 30000,
                         headers: { 'Content-Type': 'application/json' }
@@ -112,13 +109,16 @@ async function startScan() {
                     const data = resp.data || {};
 
                     for (const id of ids) {
+                        scannedThis++;
                         stats.totalScanned++;
 
                         const order = data[id] || data[id.toString()] || {};
                         const orderStatus = (order.status || "").toLowerCase();
 
+                        // 2. إذا وجدنا حالة صالحة عند المزود (ليست خطأ)
                         if (orderStatus && !/error|not found|invalid|incorrect/i.test(orderStatus)) {
                             
+                            // 3. نتحقق من قاعدتنا
                             try {
                                 const check = await axios.get(
                                     `\( {BRIDGE_URL}?action=check_order&order_id= \){id}`,
@@ -126,10 +126,13 @@ async function startScan() {
                                 );
 
                                 if (check.data?.exists !== true) {
+                                    // 🚨 كشف احتيال! (موجود في المزود وغير موجود عندنا)
                                     stats.fraudDetected++;
                                     const charge = parseFloat(order.charge || 0);
 
+                                    // تحليل نوع الاحتيال بناءً على الحالة
                                     if (orderStatus.includes('cancel')) {
+                                        // --- احتيال ملغي (آمن) ---
                                         stats.status.canceled++;
                                         await sendTelegram(
                                             `🛡️ <b>كشف محاولة احتيال (تم صدها) في ${provInfo.name}</b>\n` +
@@ -138,6 +141,7 @@ async function startScan() {
                                         );
 
                                     } else if (['completed', 'partial'].includes(orderStatus)) {
+                                        // --- احتيال مكتمل (خسارة) ---
                                         stats.status.completed++;
                                         stats.lostMoney += charge;
                                         await sendTelegram(
@@ -148,7 +152,8 @@ async function startScan() {
                                         );
 
                                     } else {
-                                        // احتيال نشط → محاولة إلغاء تلقائي عبر الـ proxy نفسه
+                                        // --- احتيال نشط (خطر) ---
+                                        // (pending, processing, in progress, etc)
                                         stats.status.active++;
                                         await sendTelegram(
                                             `🚨 <b>خطر! طلب احتيال لا يزال نشطاً في ${provInfo.name}</b>\n` +
@@ -157,7 +162,7 @@ async function startScan() {
                                             `⚡ <b>جاري محاولة الإلغاء التلقائي...</b>`
                                         );
 
-                                        // ==== الإلغاء التلقائي عبر /cancel في الـ proxy ====
+                                        // ==== كود الإلغاء التلقائي (عبر نفس الـ proxy) ====
                                         try {
                                             const cancelResp = await axios.post(
                                                 `${provInfo.url}/cancel`,
@@ -175,6 +180,7 @@ async function startScan() {
                                                 const item = cancelResult[0];
                                                 if (item.cancel === 1 || item.cancel === "1") {
                                                     await sendTelegram(`✅ <b>تم إلغاء الطلب الاحتيالي <code>${id}</code> بنجاح في ${provInfo.name}!</b>`);
+                                                    // نقل الإحصاء من active إلى canceled
                                                     stats.status.active--;
                                                     stats.status.canceled++;
                                                 } else {
@@ -206,8 +212,12 @@ async function startScan() {
             }
         }
 
-        // التقرير النهائي
+        // ==========================================
+        // 📊 التقرير الإحصائي النهائي
+        // ==========================================
+        
         let finalReport = "";
+        
         if (stats.fraudDetected === 0) {
             finalReport = "✅ <b>انتهى الفحص الشامل - لم يتم العثور على أي احتيال.</b>";
         } else {
