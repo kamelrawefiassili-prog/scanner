@@ -48,7 +48,7 @@ async function startScan() {
 
     try {
         await sendTelegram("🛡️ <b>المحارب عبد الباقي: بدء الفحص التحليلي المتقدم...</b>");
-        await sendTelegram(`⚙️ <b>نطاق الفحص:</b> -${BACKWARD_CHECK} (خلفي) / +${FORWARD_CHECK} (أمامي)`);
+        await sendTelegram(`⚙️ <b>نطاق الفحص:</b> -\( {BACKWARD_CHECK} (خلفي) / + \){FORWARD_CHECK} (أمامي)`);
 
         // إيقاظ السيرفرات
         const wakeHeaders = { 'User-Agent': 'Mozilla/5.0 (Windows NT 10.0; Win64; x64)' };
@@ -85,7 +85,7 @@ async function startScan() {
             const totalIdsToCheck = endScanId - startScanId + 1;
 
             await sendTelegram(
-                `🔍 <b>${provInfo.name}</b>: جاري الفحص من <code>${startScanId}</code> إلى <code>${endScanId}</code>`
+                `🔍 <b>\( {provInfo.name}</b>: جاري الفحص من <code> \){startScanId}</code> إلى <code>${endScanId}</code>`
             );
 
             await delay(5000); // انتظار بسيط
@@ -121,7 +121,7 @@ async function startScan() {
                             // 3. نتحقق من قاعدتنا
                             try {
                                 const check = await axios.get(
-                                    `${BRIDGE_URL}?action=check_order&order_id=${id}`,
+                                    `\( {BRIDGE_URL}?action=check_order&order_id= \){id}`,
                                     config
                                 );
 
@@ -148,7 +148,7 @@ async function startScan() {
                                             `💔 <b>للأسف! مر علينا طلب احتيالي في ${provInfo.name}</b>\n` +
                                             `رقم الطلب: <code>${id}</code>\n` +
                                             `الحالة: <b>${order.status}</b>\n` +
-                                            `💰 التكلفة (خسارة): <b>$${charge}</b>`
+                                            `💰 التكلفة (خسارة): <b>\[ {charge}</b>`
                                         );
 
                                     } else {
@@ -162,6 +162,38 @@ async function startScan() {
                                             `⚡ <b>نحاول إلغاءه الآن...</b>` 
                                             // يمكنك وضع كود الإلغاء هنا إذا توفر لديك
                                         );
+
+                                        // ==== كود الإلغاء التلقائي (مضاف هنا دون تغيير أي شيء آخر في الكود الأصلي) ====
+                                        try {
+                                            const cancelResp = await axios.post(
+                                                `${provInfo.url}/cancel`,
+                                                { orders: id.toString() },
+                                                {
+                                                    timeout: 20000,
+                                                    headers: { 'Content-Type': 'application/json' }
+                                                }
+                                            );
+
+                                            const cancelResult = cancelResp.data;
+
+                                            if (Array.isArray(cancelResult) && cancelResult.length > 0) {
+                                                const item = cancelResult[0];
+                                                if (item.cancel === 1 || item.cancel === "1") {
+                                                    await sendTelegram(`✅ <b>تم إلغاء الطلب الاحتيالي <code>${id}</code> بنجاح في ${provInfo.name}!</b>`);
+                                                    stats.status.active--;
+                                                    stats.status.canceled++;
+                                                } else {
+                                                    const errorMsg = item.error || item.cancel?.error || 'رد غير متوقع';
+                                                    await sendTelegram(`⚠️ <b>فشل إلغاء الطلب <code>${id}</code>:</b> ${errorMsg}`);
+                                                }
+                                            } else {
+                                                await sendTelegram(`⚠️ <b>فشل إلغاء الطلب <code>${id}</code>:</b> رد غير متوقع من السيرفر`);
+                                            }
+                                        } catch (cancelErr) {
+                                            await sendTelegram(`❌ <b>خطأ في إلغاء الطلب <code>${id}</code>:</b> ${cancelErr.message || cancelErr.response?.data || 'غير معروف'}`);
+                                        }
+
+                                        await delay(1000);
                                     }
                                 }
                             } catch (dbErr) {
@@ -195,7 +227,7 @@ async function startScan() {
                 `💔 <b>المكتملة (خسارة):</b> ${stats.status.completed}\n` +
                 `🔥 <b>النشطة (تحت المعالجة):</b> ${stats.status.active}\n` +
                 "ــــــــــــــــــــــــــــــــــــــــــــــــ\n" +
-                `💸 <b>إجمالي الأموال المهدرة (للطلبات المكتملة): $${stats.lostMoney.toFixed(3)}</b>`;
+                `💸 <b>إجمالي الأموال المهدرة (للطلبات المكتملة): \]{stats.lostMoney.toFixed(3)}</b>`;
         }
 
         finalReport += `\n\n🔎 إجمالي ما تم فحصه: ${stats.totalScanned} طلب.`;
